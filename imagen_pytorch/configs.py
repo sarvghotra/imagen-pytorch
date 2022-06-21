@@ -22,7 +22,7 @@ def SingleOrList(inner_type):
 
 # noise schedule
 
-class BetaSchedule(Enum):
+class NoiseSchedule(Enum):
     cosine = 'cosine'
     linear = 'linear'
 
@@ -45,14 +45,15 @@ class ImagenConfig(AllowExtraBaseModel):
     unets: ListOrTuple(UnetConfig)
     image_sizes: ListOrTuple(int)
     timesteps: SingleOrList(int) = 1000
-    beta_schedules: SingleOrList(BetaSchedule) = 'cosine'
+    noise_schedules: SingleOrList(NoiseSchedule) = 'cosine'
     warmup_steps: SingleOrList(int) = None
     cosine_decay_max_steps: SingleOrList(int) = None
     text_encoder_name: str = DEFAULT_T5_NAME
     channels: int = 3
     loss_type: str = 'l2'
     learned_variance: bool = True
-    cond_drop_prob: float = 0.5
+    cond_drop_prob: float = 0.5,
+    accelerate: bool = False
 
     @validator('image_sizes')
     def check_image_sizes(cls, image_sizes, values):
