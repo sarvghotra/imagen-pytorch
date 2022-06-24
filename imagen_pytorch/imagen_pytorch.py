@@ -658,7 +658,7 @@ class ResnetBlock(nn.Module):
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else Scale(skip_connection_scale)
 
 
-    def forward(self, x, cond = None, time_emb = None):
+    def forward(self, x, time_emb = None, cond = None):
 
         scale_shift = None
         if exists(self.time_mlp) and exists(time_emb):
@@ -997,6 +997,8 @@ class Unet(nn.Module):
 
         # guide researchers
 
+        assert attn_heads > 1, 'you need to have more than 1 attention head, ideally at least 4 or 8'
+
         if dim < 128:
             print('The base dimension of your u-net should ideally be no smaller than 128, as recommended by a professional DDPM trainer https://nonint.com/2022/05/04/friends-dont-let-friends-train-small-diffusion-models/')
 
@@ -1089,7 +1091,6 @@ class Unet(nn.Module):
         # normalizations
 
         self.norm_cond = nn.LayerNorm(cond_dim)
-        self.norm_mid_cond = nn.LayerNorm(cond_dim)
 
         # text encoding conditioning (optional)
 
@@ -1172,7 +1173,7 @@ class Unet(nn.Module):
             self.downs.append(nn.ModuleList([
                 downsample_klass(dim_in, dim_out = dim_out) if memory_efficient else None,
                 ResnetBlock(dim_out if memory_efficient else dim_in, dim_out, cond_dim = layer_cond_dim, linear_attn = layer_use_linear_cross_attn, time_cond_dim = time_cond_dim, groups = groups, skip_connection_scale = skip_connect_scale),
-                nn.ModuleList([ResnetBlock(dim_out, dim_out, groups = groups, use_gca = use_global_context_attn, skip_connection_scale = skip_connect_scale) for _ in range(layer_num_resnet_blocks)]),
+                nn.ModuleList([ResnetBlock(dim_out, dim_out, time_cond_dim = time_cond_dim, groups = groups, use_gca = use_global_context_attn, skip_connection_scale = skip_connect_scale) for _ in range(layer_num_resnet_blocks)]),
                 transformer_block_klass(dim = dim_out, heads = attn_heads, dim_head = attn_dim_head, ff_mult = ff_mult),
                 downsample_klass(dim_out) if not memory_efficient and not is_last else None,
             ]))
@@ -1191,7 +1192,7 @@ class Unet(nn.Module):
 
             self.ups.append(nn.ModuleList([
                 ResnetBlock(dim_out * 2, dim_in, cond_dim = layer_cond_dim, linear_attn = layer_use_linear_cross_attn, time_cond_dim = time_cond_dim, groups = groups, skip_connection_scale = skip_connect_scale),
-                nn.ModuleList([ResnetBlock(dim_in, dim_in, groups = groups, skip_connection_scale = skip_connect_scale, use_gca = use_global_context_attn) for _ in range(layer_num_resnet_blocks)]),
+                nn.ModuleList([ResnetBlock(dim_in, dim_in, time_cond_dim = time_cond_dim, groups = groups, skip_connection_scale = skip_connect_scale, use_gca = use_global_context_attn) for _ in range(layer_num_resnet_blocks)]),
                 transformer_block_klass(dim = dim_in, heads = attn_heads, dim_head = attn_dim_head, ff_mult = ff_mult),
                 Upsample(dim_in) if not is_last or memory_efficient else nn.Identity()
             ]))
@@ -1389,10 +1390,10 @@ class Unet(nn.Module):
             if exists(pre_downsample):
                 x = pre_downsample(x)
 
-            x = init_block(x, c, t)
+            x = init_block(x, t, c)
 
             for resnet_block in resnet_blocks:
-                x = resnet_block(x)
+                x = resnet_block(x, t)
 
             x = attn_block(x)
             hiddens.append(x)
@@ -1400,19 +1401,19 @@ class Unet(nn.Module):
             if exists(post_downsample):
                 x = post_downsample(x)
 
-        x = self.mid_block1(x, c, t)
+        x = self.mid_block1(x, t, c)
 
         if exists(self.mid_attn):
             x = self.mid_attn(x)
 
-        x = self.mid_block2(x, c, t)
+        x = self.mid_block2(x, t, c)
 
         for init_block, resnet_blocks, attn_block, upsample in self.ups:
             x = torch.cat((x, hiddens.pop()), dim = 1)
-            x = init_block(x, c, t)
+            x = init_block(x, t, c)
 
             for resnet_block in resnet_blocks:
-                x = resnet_block(x)
+                x = resnet_block(x, t)
 
             x = attn_block(x)
             x = upsample(x)
