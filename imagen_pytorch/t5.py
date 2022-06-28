@@ -52,7 +52,7 @@ def get_encoded_dim(name):
 
 # encoding text
 
-def t5_encode_text(texts, name = DEFAULT_T5_NAME):
+def t5_encode_text(texts, name = DEFAULT_T5_NAME, padding = 'longest'):
     t5, tokenizer = get_model_and_tokenizer(name)
 
     if torch.cuda.is_available():
@@ -63,7 +63,7 @@ def t5_encode_text(texts, name = DEFAULT_T5_NAME):
     encoded = tokenizer.batch_encode_plus(
         texts,
         return_tensors = "pt",
-        padding = 'longest',
+        padding = padding,
         max_length = MAX_LENGTH,
         truncation = True
     )
