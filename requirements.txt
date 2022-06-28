@@ -1,0 +1,16 @@
+click
+einops>=0.4
+einops-exts
+numpy
+packaging
+pillow
+pydantic
+pytorch-warmup
+resize-right
+sentencepiece
+torch>=1.6
+torchvision
+transformers
+tqdm
+ema-pytorch>=0.0.3
+accelerate
