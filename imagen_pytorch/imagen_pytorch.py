@@ -12,6 +12,9 @@ import torch.nn.functional as F
 from torch import nn, einsum
 from torch.special import expm1
 import torchvision.transforms as T
+import torch.distributed as dist
+from utils_dist.utils_dist import get_dist_info
+from torch.nn.parallel import DistributedDataParallel
 
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange, Reduce
@@ -1263,19 +1266,19 @@ class Unet(nn.Module):
 
         return self.__class__(**{**self._locals, **updated_kwargs})
 
-    def forward_with_cond_scale(
-        self,
-        *args,
-        cond_scale = 1.,
-        **kwargs
-    ):
-        logits = self.forward(*args, **kwargs)
+    # def forward_with_cond_scale(
+    #     self,
+    #     *args,
+    #     cond_scale = 1.,
+    #     **kwargs
+    # ):
+    #     logits = self.forward(*args, **kwargs)
 
-        if cond_scale == 1:
-            return logits
+    #     if cond_scale == 1:
+    #         return logits
 
-        null_logits = self.forward(*args, cond_drop_prob = 1., **kwargs)
-        return null_logits + (logits - null_logits) * cond_scale
+    #     null_logits = self.forward(*args, cond_drop_prob = 1., **kwargs)
+    #     return null_logits + (logits - null_logits) * cond_scale
 
     def forward(
         self,
@@ -1524,8 +1527,16 @@ class Imagen(nn.Module):
         p2_loss_weight_k = 1,
         dynamic_thresholding = True,
         dynamic_thresholding_percentile = 0.9,      # unsure what this was based on perusal of paper
+        lowres_cond = False,
     ):
         super().__init__()
+
+        # if dist.is_available() and dist.is_initialized():
+        #     _, world_size = get_dist_info()
+        #     num_gpu = world_size
+        # else:
+        #     num_gpu= torch.cuda.device_count()
+        # device = torch.device('cuda' if num_gpu > 0 else 'cpu')
 
         # loss
 
@@ -1540,6 +1551,9 @@ class Imagen(nn.Module):
 
         self.loss_type = loss_type
         self.loss_fn = loss_fn
+
+        # conditioning on lowres (noise augmentation?)
+        self.lowres_cond = lowres_cond
 
         # conditioning hparams
 
@@ -1605,6 +1619,7 @@ class Imagen(nn.Module):
                 learned_sinu_pos_emb = continuous_times
             )
 
+            # one_unet.to(device)
             self.unets.append(one_unet)
 
         # unet image sizes
@@ -1650,7 +1665,13 @@ class Imagen(nn.Module):
 
         # default to device of unets passed in
 
-        self.to(next(self.unets.parameters()).device)
+        # self.to(device)
+
+    def wrap_unets_in_ddp(self):
+        for i, unet in enumerate(self.unets):
+            # unet.to(device)
+            dist_unet = DistributedDataParallel(unet, device_ids=[torch.cuda.current_device()]) #, find_unused_parameters=True)
+            self.unets[i] = dist_unet
 
     @property
     def device(self):
@@ -1679,10 +1700,25 @@ class Imagen(nn.Module):
         for unet, device in zip(self.unets, devices):
             unet.to(device)
 
+    def forward_with_cond_scale(
+        self,
+        *args,
+        unet = None,
+        cond_scale = 1.,
+        **kwargs
+    ):
+        logits = unet(*args, **kwargs)
+
+        if cond_scale == 1:
+            return logits
+
+        null_logits = unet(*args, cond_drop_prob = 1., **kwargs)
+        return null_logits + (logits - null_logits) * cond_scale
+
     def p_mean_variance(self, unet, x, t, *, noise_scheduler, text_embeds = None, text_mask = None, cond_images = None, lowres_cond_img = None, lowres_noise_times = None, cond_scale = 1., model_output = None, t_next = None, pred_objective = 'noise', dynamic_threshold = True):
         assert not (cond_scale != 1. and not self.can_classifier_guidance), 'imagen was not trained with conditional dropout, and thus one cannot use classifier free guidance (cond_scale anything other than 1)'
 
-        pred = default(model_output, lambda: unet.forward_with_cond_scale(x, noise_scheduler.get_condition(t), text_embeds = text_embeds, text_mask = text_mask, cond_images = cond_images, cond_scale = cond_scale, lowres_cond_img = lowres_cond_img, lowres_noise_times = self.lowres_noise_schedule.get_condition(lowres_noise_times)))
+        pred = default(model_output, lambda: self.forward_with_cond_scale(x, noise_scheduler.get_condition(t), unet = unet, text_embeds = text_embeds, text_mask = text_mask, cond_images = cond_images, cond_scale = cond_scale, lowres_cond_img = lowres_cond_img, lowres_noise_times = self.lowres_noise_schedule.get_condition(lowres_noise_times)))
 
         if pred_objective == 'noise':
             x_start = noise_scheduler.predict_start_from_noise(x, t = t, noise = pred)
@@ -1793,7 +1829,7 @@ class Imagen(nn.Module):
                 lowres_cond_img = lowres_noise_times = None
                 shape = (batch_size, channel, image_size, image_size)
 
-                if unet.lowres_cond:
+                if self.lowres_cond:
                     lowres_noise_times = self.lowres_noise_schedule.get_times(batch_size, lowres_sample_noise_level, device = device)
 
                     lowres_cond_img = resize_image_to(img, image_size)
@@ -1899,7 +1935,7 @@ class Imagen(nn.Module):
         assert not (len(self.unets) > 1 and not exists(unet_number)), f'you must specify which unet you want trained, from a range of 1 to {len(self.unets)}, if you are training cascading DDPM (multiple unets)'
         unet_number = default(unet_number, 1)
         unet_index = unet_number - 1
-        
+
         unet = self.get_unet(unet_number)
 
         noise_scheduler      = self.noise_schedulers[unet_index]
