@@ -5,6 +5,9 @@ from math import ceil
 from contextlib import contextmanager
 from functools import partial, wraps
 from collections.abc import Iterable
+import torch.distributed as dist
+from utils_dist.utils_dist import get_dist_info
+from torch.nn.parallel import DistributedDataParallel
 
 import torch
 from torch import nn
@@ -233,7 +236,28 @@ class ImagenTrainer(nn.Module):
 
         # automatic set device to imagen's device, if needed
 
-        self.to(next(imagen.parameters()).device)
+    def move_to_device(self):
+        distributed_train = False
+        if dist.is_available() and dist.is_initialized():
+            _, world_size = get_dist_info()
+            num_gpu = world_size
+            distributed_train = True
+        else:
+            num_gpu= torch.cuda.device_count()
+
+        device = torch.device('cuda' if num_gpu > 0 else 'cpu')
+        self.imagen.to(device)
+        if distributed_train:
+            # for unet in self.imagen.unets:
+            #     unet.to(device)
+            self.imagen.wrap_unets_in_ddp()
+        self.to(next(self.imagen.parameters()).device)
+        return
+
+    def get_lr(self, unet_number):
+        optimizer_key = f'optim{unet_number}'
+        optimizer = getattr(self, optimizer_key)
+        return optimizer.param_groups[0]['lr']
 
     def save(self, path, overwrite = True, **kwargs):
         path = Path(path)
@@ -275,12 +299,18 @@ class ImagenTrainer(nn.Module):
         path = Path(path)
         assert path.exists()
 
-        loaded_obj = torch.load(str(path))
+        loaded_obj = torch.load(str(path), map_location=torch.device('cpu'))
 
         if version.parse(__version__) != loaded_obj['version']:
             print(f'loading saved imagen at version {loaded_obj["version"]}, but current package version is {__version__}')
 
-        self.imagen.load_state_dict(loaded_obj['model'], strict = strict)
+        model_wts_state_dict = loaded_obj['model']
+        new_model_wts_state_dict = {}
+        for key, value in model_wts_state_dict.items():
+            new_key = key[:8] + key[15:]
+            new_model_wts_state_dict[new_key] = value
+
+        self.imagen.load_state_dict(new_model_wts_state_dict, strict = strict)
         self.step.copy_(torch.ones_like(self.step) * loaded_obj['step'])
 
         if only_model:
@@ -308,7 +338,12 @@ class ImagenTrainer(nn.Module):
 
         if self.use_ema:
             assert 'ema' in loaded_obj
-            self.ema_unets.load_state_dict(loaded_obj['ema'], strict = strict)
+            ema_state_dict = loaded_obj['ema']
+            new_ema_state_dict = {}
+            for key, value in ema_state_dict.items():
+                new_key = ''.join(key.split('module.'))
+                new_ema_state_dict[new_key] = value
+            self.ema_unets.load_state_dict(new_ema_state_dict, strict = strict)
 
         return loaded_obj
 
