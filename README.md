@@ -253,6 +253,8 @@ Not at the moment but one will likely be trained and open sourced within the yea
 
 - <a href="https://github.com/marunine">Marunine</a> for providing a <a href="https://github.com/lucidrains/imagen-pytorch/issues/72#issuecomment-1163275757">potential solution</a> for a color shifting issue in the memory efficient u-nets. Thanks to <a href="https://github.com/jacobwjs">Jacob</a> for sharing experimental comparisons between the base and memory-efficient unets
 
+- <a href="https://github.com/marunine">Marunine</a> for finding numerous bugs, and for sharing his experimental configurations and results
+
 - You? It isn't done yet, chip in if you are a researcher or skilled ML engineer
 
 
@@ -285,6 +287,7 @@ Not at the moment but one will likely be trained and open sourced within the yea
 - [ ] preencoding of text to memmapped embeddings
 - [ ] build out CLI tool for training, resuming training, and one-line generation of image
 - [ ] extend to video generation, using axial time attention as in Ho's video ddpm paper + https://github.com/lucidrains/flexible-diffusion-modeling-videos-pytorch for up to 25 minute video
+- [ ] add inpainting ability using resampler from repaint paper https://arxiv.org/abs/2201.09865
 
 ## Citations
 
